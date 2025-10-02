@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, APIRouter, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
@@ -125,10 +125,10 @@ class ParkingRequestCreate(BaseModel):
     phone: str
     team: Optional[str] = None
     shift: Optional[str] = None
-    office_id: str
+    office_id: str = "default-office"  # FIXED: Added default office ID
     vehicle_type: VehicleType
     vehicle_number: str
-    duration_type: ParkingDurationType
+    duration_type: ParkingDurationType = ParkingDurationType.SINGLE_DAY  # FIXED: Added default
     parking_date: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -172,6 +172,75 @@ ADMIN_CREDENTIALS = {
     "admin@parkingsystem.com": "admin123",
     "superadmin@parkingsystem.com": "super123"
 }
+
+# FIXED: Initialize default office on startup - IMPROVED VERSION
+def initialize_default_office():
+    try:
+        # Check if ANY office exists (not just default-office)
+        offices = db.execute_query("SELECT * FROM offices LIMIT 1")
+        if not offices:
+            # Create default office
+            office_data = {
+                "id": "default-office",
+                "name": "Main Office",
+                "location": "Chennai",
+                "total_car_slots": 50,
+                "total_bike_slots": 100,
+                "available_car_slots": 50,
+                "available_bike_slots": 100,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            query = """
+            INSERT INTO offices (id, name, location, total_car_slots, total_bike_slots, 
+                                available_car_slots, available_bike_slots, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (
+                office_data["id"], office_data["name"], office_data["location"],
+                office_data["total_car_slots"], office_data["total_bike_slots"],
+                office_data["available_car_slots"], office_data["available_bike_slots"],
+                office_data["created_at"]
+            )
+            
+            db.execute_update(query, params)
+            print("✅ Default office created successfully!")
+        else:
+            print("✅ Offices already exist in database")
+            
+            # If default-office doesn't exist but other offices do, create it
+            default_office = db.execute_query("SELECT * FROM offices WHERE id = 'default-office'")
+            if not default_office:
+                # Use the first available office as default
+                first_office = offices[0]
+                print(f"⚠️ Using existing office as default: {first_office['name']}")
+                
+    except Exception as e:
+        print(f"❌ Error creating default office: {e}")
+
+# FIXED: Function to get or create default office
+def get_or_create_default_office():
+    try:
+        # First try to get default-office
+        office = db.execute_query("SELECT * FROM offices WHERE id = 'default-office'")
+        if office:
+            return office[0]
+        
+        # If default-office doesn't exist, get any office
+        offices = db.execute_query("SELECT * FROM offices LIMIT 1")
+        if offices:
+            return offices[0]
+        
+        # If no offices exist, create default office
+        initialize_default_office()
+        office = db.execute_query("SELECT * FROM offices WHERE id = 'default-office'")
+        if office:
+            return office[0]
+        
+        return None
+    except Exception as e:
+        print(f"Error getting default office: {e}")
+        return None
 
 # API Routes with SQLite implementation
 @api_router.get("/")
@@ -241,87 +310,114 @@ async def get_offices():
     offices = db.execute_query(query)
     return [Office(**office) for office in offices]
 
-# Parking Request Management
+# FIXED: Parking Request Management - COMPLETELY REWRITTEN
 @api_router.post("/parking-requests", response_model=ParkingRequest)
 async def create_parking_request(request: ParkingRequestCreate):
-    # Check if office exists
-    office = db.execute_query("SELECT * FROM offices WHERE id = ?", (request.office_id,))
-    if not office:
-        raise HTTPException(status_code=404, detail="Office not found")
+    print(f"🚗 Received parking request: {request.dict()}")  # Debug log
     
-    # Create or find user
-    user = db.execute_query("SELECT * FROM users WHERE emp_id = ?", (request.emp_id,))
-    if not user:
-        user_data = UserCreate(
-            emp_id=request.emp_id,
-            name=request.name,
-            email=request.email,
-            phone=request.phone,
-            team=request.team,
-            shift=request.shift
-        )
-        user_obj = User(**user_data.dict())
-        user_dict = user_obj.dict()
-        user_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        # FIXED: Get or create default office
+        office = get_or_create_default_office()
+        if not office:
+            # If still no office, create one immediately
+            initialize_default_office()
+            office = get_or_create_default_office()
+            if not office:
+                raise HTTPException(status_code=500, detail="No office available and could not create one")
+        
+        print(f"🏢 Using office: {office['name']} (ID: {office['id']})")
+        
+        # Update the request with the actual office ID
+        actual_office_id = office['id']
+        
+        # Create or find user
+        user = db.execute_query("SELECT * FROM users WHERE emp_id = ?", (request.emp_id,))
+        if not user:
+            user_data = UserCreate(
+                emp_id=request.emp_id,
+                name=request.name,
+                email=request.email,
+                phone=request.phone,
+                team=request.team,
+                shift=request.shift
+            )
+            user_obj = User(**user_data.dict())
+            user_dict = user_obj.dict()
+            user_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+            
+            query = """
+            INSERT INTO users (id, emp_id, name, email, phone, team, shift, role, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (
+                user_dict["id"], user_dict["emp_id"], user_dict["name"],
+                user_dict["email"], user_dict["phone"], user_dict["team"],
+                user_dict["shift"], user_dict["role"], user_dict["created_at"]
+            )
+            db.execute_update(query, params)
+            user_id = user_obj.id
+            print(f"👤 Created new user: {request.name}")
+        else:
+            user_id = user[0]["id"]
+            print(f"👤 Found existing user: {user[0]['name']}")
+        
+        # Check availability
+        vehicle_slot_field = f"available_{request.vehicle_type}_slots"
+        available_slots = office.get(vehicle_slot_field, 0)
+        
+        parking_request_dict = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "office_id": actual_office_id,  # Use actual office ID
+            "vehicle_type": request.vehicle_type,
+            "vehicle_number": request.vehicle_number,
+            "duration_type": request.duration_type,
+            "parking_date": request.parking_date,
+            "start_date": request.start_date,
+            "end_date": request.end_date,
+            "recurring_pattern": request.recurring_pattern,
+            "description": request.description,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        if available_slots <= 0:
+            parking_request_dict["status"] = RequestStatus.WAITLIST
+            print("⚠️ No slots available - added to waitlist")
+        else:
+            print(f"✅ Slots available: {available_slots}")
         
         query = """
-        INSERT INTO users (id, emp_id, name, email, phone, team, shift, role, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO parking_requests 
+        (id, user_id, office_id, vehicle_type, vehicle_number, duration_type, 
+         parking_date, start_date, end_date, recurring_pattern, description, 
+         status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
-            user_dict["id"], user_dict["emp_id"], user_dict["name"],
-            user_dict["email"], user_dict["phone"], user_dict["team"],
-            user_dict["shift"], user_dict["role"], user_dict["created_at"]
+            parking_request_dict["id"], parking_request_dict["user_id"],
+            parking_request_dict["office_id"], parking_request_dict["vehicle_type"],
+            parking_request_dict["vehicle_number"], parking_request_dict["duration_type"],
+            parking_request_dict["parking_date"], parking_request_dict["start_date"],
+            parking_request_dict["end_date"], parking_request_dict["recurring_pattern"],
+            parking_request_dict["description"], parking_request_dict["status"],
+            parking_request_dict["created_at"], parking_request_dict["updated_at"]
         )
+        
         db.execute_update(query, params)
-        user_id = user_obj.id
-    else:
-        user_id = user[0]["id"]
-    
-    # Check availability
-    office_data = office[0]
-    vehicle_slot_field = f"available_{request.vehicle_type}_slots"
-    available_slots = office_data.get(vehicle_slot_field, 0)
-    
-    parking_request_dict = {
-        "id": str(uuid.uuid4()),
-        "user_id": user_id,
-        "office_id": request.office_id,
-        "vehicle_type": request.vehicle_type,
-        "vehicle_number": request.vehicle_number,
-        "duration_type": request.duration_type,
-        "parking_date": request.parking_date,
-        "start_date": request.start_date,
-        "end_date": request.end_date,
-        "recurring_pattern": request.recurring_pattern,
-        "description": request.description,
-        "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    if available_slots <= 0:
-        parking_request_dict["status"] = RequestStatus.WAITLIST
-    
-    query = """
-    INSERT INTO parking_requests 
-    (id, user_id, office_id, vehicle_type, vehicle_number, duration_type, 
-     parking_date, start_date, end_date, recurring_pattern, description, 
-     status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
-    params = (
-        parking_request_dict["id"], parking_request_dict["user_id"],
-        parking_request_dict["office_id"], parking_request_dict["vehicle_type"],
-        parking_request_dict["vehicle_number"], parking_request_dict["duration_type"],
-        parking_request_dict["parking_date"], parking_request_dict["start_date"],
-        parking_request_dict["end_date"], parking_request_dict["recurring_pattern"],
-        parking_request_dict["description"], parking_request_dict["status"],
-        parking_request_dict["created_at"], parking_request_dict["updated_at"]
-    )
-    
-    db.execute_update(query, params)
-    return ParkingRequest(**parking_request_dict)
+        print("✅ Parking request saved to database")
+        
+        # Return success response
+        response_data = ParkingRequest(**parking_request_dict)
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error creating parking request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create parking request: {str(e)}")
 
 @api_router.get("/parking-requests", response_model=List[dict])
 async def get_parking_requests(status: Optional[str] = None):
@@ -486,6 +582,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Initialize default office when app starts
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Starting Parking Management System...")
+    initialize_default_office()
+    print("✅ Startup completed!")
 
 if __name__ == "__main__":
     import uvicorn
