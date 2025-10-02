@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 const API = `${BACKEND_URL}/api`;
 
 // Landing Page Component
@@ -95,9 +95,8 @@ const LandingPage = ({ onNavigate }) => {
   );
 };
 
-// Booking Form Component
+// Booking Form Component - SIMPLIFIED VERSION (No availability check)
 const BookingForm = ({ vehicleType, onNavigate }) => {
-  const [offices, setOffices] = useState([]);
   const [formData, setFormData] = useState({
     emp_id: '',
     name: '',
@@ -105,26 +104,12 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
     phone: '',
     team: '',
     shift: '',
-    office_id: '',
     vehicle_number: '',
     parking_date: '',
     description: ''
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    fetchOffices();
-  }, []);
-
-  const fetchOffices = async () => {
-    try {
-      const response = await axios.get(`${API}/offices`);
-      setOffices(response.data);
-    } catch (error) {
-      console.error('Error fetching offices:', error);
-    }
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -134,32 +119,55 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
     try {
       const requestData = {
         ...formData,
-        vehicle_type: vehicleType
+        vehicle_type: vehicleType,
+        office_id: "default-office",
+        duration_type: "single_day"
       };
 
+      console.log("Submitting parking request:", requestData);
+      console.log("API URL:", `${API}/parking-requests`);
+
       const response = await axios.post(`${API}/parking-requests`, requestData);
-      setMessage(
-        response.data.status === 'waitlist' 
-          ? 'No slots available. You have been added to the waitlist.' 
-          : 'Parking request submitted successfully! Please wait for admin approval.'
-      );
       
-      // Reset form
+      console.log("Response received:", response.data);
+      
+      if (response.data.status === 'waitlist') {
+        setMessage('No slots available. You have been added to the waitlist.');
+      } else if (response.data.status === 'approved') {
+        setMessage(`Parking slot booked successfully! ${response.data.slot_number ? `Your slot number: ${response.data.slot_number}` : ''}`);
+      } else {
+        setMessage('Parking request submitted successfully! Please wait for admin approval.');
+      }
+      
+      // Reset form but keep some values for convenience
       setFormData({
-        emp_id: '',
-        name: '',
-        email: '',
-        phone: '',
-        team: '',
+        emp_id: formData.emp_id,
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        team: formData.team,
         shift: '',
-        office_id: '',
         vehicle_number: '',
         parking_date: '',
         description: ''
       });
+
     } catch (error) {
-      setMessage('Error submitting request. Please try again.');
-      console.error('Error:', error);
+      console.error('Full error object:', error);
+      console.error('Error response:', error.response);
+      console.error('Error message:', error.message);
+      
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        setMessage(`Error: ${error.response.status} - ${error.response.data?.detail || 'Server error'}`);
+      } else if (error.request) {
+        // The request was made but no response was received
+        setMessage('Error: No response from server. Please check if backend is running.');
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        setMessage(`Error: ${error.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -200,13 +208,17 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
               <h2 className="text-3xl font-bold text-gray-800 mb-2">
                 Book {vehicleType === 'bike' ? 'Bike' : 'Car'} Parking
               </h2>
-              <p className="text-gray-600">Fill in the details to reserve your parking spot</p>
+              <p className="text-gray-600">
+                {vehicleType === 'car' ? '25 slots per shift | 25 slots full day' : '50 slots per shift | 50 slots full day'}
+              </p>
             </div>
 
             {message && (
               <div className={`p-4 rounded-lg mb-6 ${
-                message.includes('Error') || message.includes('waitlist')
+                message.includes('Error') 
                   ? 'bg-red-50 text-red-700 border border-red-200'
+                  : message.includes('waitlist')
+                  ? 'bg-yellow-50 text-yellow-700 border border-yellow-200'
                   : 'bg-green-50 text-green-700 border border-green-200'
               }`}>
                 {message}
@@ -226,6 +238,7 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     onChange={handleChange}
                     required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your employee ID"
                   />
                 </div>
                 <div>
@@ -239,6 +252,7 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     onChange={handleChange}
                     required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your full name"
                   />
                 </div>
               </div>
@@ -255,6 +269,7 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     onChange={handleChange}
                     required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your email"
                   />
                 </div>
                 <div>
@@ -268,6 +283,7 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     onChange={handleChange}
                     required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your phone number"
                   />
                 </div>
               </div>
@@ -283,16 +299,18 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     value={formData.team}
                     onChange={handleChange}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your team"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Shift
+                    Shift *
                   </label>
                   <select
                     name="shift"
                     value={formData.shift}
                     onChange={handleChange}
+                    required
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="">Select Shift</option>
@@ -301,26 +319,6 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
                     <option value="night">Night (11 PM - 8 AM)</option>
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Office *
-                </label>
-                <select
-                  name="office_id"
-                  value={formData.office_id}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Select Office</option>
-                  {offices.map((office) => (
-                    <option key={office.id} value={office.id}>
-                      {office.name} - {office.location}
-                    </option>
-                  ))}
-                </select>
               </div>
 
               <div className="grid md:grid-cols-2 gap-6">
@@ -371,9 +369,19 @@ const BookingForm = ({ vehicleType, onNavigate }) => {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white py-3 px-6 rounded-lg font-medium transition-colors"
+                className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white py-3 px-6 rounded-lg font-medium transition-colors flex items-center justify-center"
               >
-                {loading ? 'Submitting...' : 'Submit Parking Request'}
+                {loading ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Submitting...
+                  </>
+                ) : (
+                  `Book ${vehicleType === 'car' ? 'Car' : 'Bike'} Parking`
+                )}
               </button>
             </form>
           </div>
@@ -465,9 +473,19 @@ const UserStatus = ({ onNavigate }) => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                  className="bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center"
                 >
-                  {loading ? 'Searching...' : 'Search'}
+                  {loading ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Searching...
+                    </>
+                  ) : (
+                    'Search'
+                  )}
                 </button>
               </div>
             </form>
@@ -482,7 +500,7 @@ const UserStatus = ({ onNavigate }) => {
               <div className="space-y-4">
                 <h3 className="text-xl font-semibold text-gray-800 mb-4">Your Parking Requests</h3>
                 {requests.map((request) => (
-                  <div key={request.id} className="border border-gray-200 rounded-lg p-6">
+                  <div key={request.id} className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center space-x-4">
                         <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(request.status)}`}>
@@ -600,9 +618,19 @@ const AdminLogin = ({ onNavigate, onAdminLogin }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white py-3 px-6 rounded-lg font-medium transition-colors"
+            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white py-3 px-6 rounded-lg font-medium transition-colors flex items-center justify-center"
           >
-            {loading ? 'Logging in...' : 'Login'}
+            {loading ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Logging in...
+              </>
+            ) : (
+              'Login'
+            )}
           </button>
         </form>
 
@@ -618,6 +646,7 @@ const AdminLogin = ({ onNavigate, onAdminLogin }) => {
         <div className="mt-8 text-center text-sm text-blue-200">
           <p>Demo Credentials:</p>
           <p>admin@parkingsystem.com / admin123</p>
+          <p className="mt-1">superadmin@parkingsystem.com / super123</p>
         </div>
       </div>
     </div>
@@ -669,6 +698,7 @@ const AdminDashboard = ({ onNavigate, admin }) => {
       fetchRequests(activeTab);
     } catch (error) {
       console.error('Error updating request:', error);
+      alert('Error updating request. Please try again.');
     }
   };
 
@@ -682,7 +712,17 @@ const AdminDashboard = ({ onNavigate, admin }) => {
   };
 
   if (loading || !dashboard) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex items-center space-x-2">
+          <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="text-gray-600">Loading dashboard...</span>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -695,6 +735,9 @@ const AdminDashboard = ({ onNavigate, admin }) => {
                 <span className="text-white font-bold">P</span>
               </div>
               <h1 className="text-xl font-bold text-gray-800">Admin Dashboard</h1>
+              <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                Welcome, {admin?.email}
+              </span>
             </div>
             <button
               onClick={() => onNavigate('home')}
@@ -774,16 +817,20 @@ const AdminDashboard = ({ onNavigate, admin }) => {
           <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {dashboard.office_stats.map((office) => (
-                <div key={office.office_name} className="border rounded-lg p-4">
+                <div key={office.office_name} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                   <h4 className="font-semibold text-gray-800 mb-2">{office.office_name}</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span>Car Utilization:</span>
-                      <span className="font-medium">{office.car_utilization}%</span>
+                      <span className={`font-medium ${office.car_utilization > 80 ? 'text-red-600' : office.car_utilization > 60 ? 'text-yellow-600' : 'text-green-600'}`}>
+                        {office.car_utilization}%
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span>Bike Utilization:</span>
-                      <span className="font-medium">{office.bike_utilization}%</span>
+                      <span className={`font-medium ${office.bike_utilization > 80 ? 'text-red-600' : office.bike_utilization > 60 ? 'text-yellow-600' : 'text-green-600'}`}>
+                        {office.bike_utilization}%
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span>Available Car Slots:</span>
@@ -834,7 +881,7 @@ const AdminDashboard = ({ onNavigate, admin }) => {
             ) : (
               <div className="space-y-4">
                 {requests.map((request) => (
-                  <div key={request.id} className="border border-gray-200 rounded-lg p-6">
+                  <div key={request.id} className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center space-x-4">
                         <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(request.status)}`}>
